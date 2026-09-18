@@ -1,0 +1,76 @@
+rules_version = '2';
+
+// ---------------------------------------------------------------------------
+// AusbildungTracker – Firestore security rules
+//
+// The app is single-user. Exactly one Google account may access the data:
+// the uid stored in `settings/access.ownerUid`. That document is claimed
+// automatically by the first authenticated user (see the client bootstrap in
+// src/lib/firebase/auth.ts) and is immutable afterwards.
+//
+// Everything else – including the Gmail refresh token – is locked down.
+// ---------------------------------------------------------------------------
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/settings/access).data.ownerUid == request.auth.uid;
+    }
+
+    // Ownership bootstrap. The first signed-in user claims the app.
+    // A read is allowed while the document does not exist yet (so the client
+    // can detect that it is unclaimed) or by the owner afterwards.
+    match /settings/access {
+      allow read: if isSignedIn()
+        && (
+          !exists(/databases/$(database)/documents/settings/access)
+          || get(/databases/$(database)/documents/settings/access).data.ownerUid == request.auth.uid
+        );
+      allow create: if isSignedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && !exists(/databases/$(database)/documents/settings/access);
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner() && request.auth.uid == userId;
+
+      // Gmail refresh token & other credentials.
+      // Admin SDK (Cloud Functions) only – clients can never read or write this.
+      match /private/{docId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /applications/{applicationId} {
+      allow read, write: if isOwner();
+
+      match /emails/{emailId} {
+        allow read, write: if isOwner();
+      }
+    }
+
+    // Sync audit log. Written exclusively by Cloud Functions.
+    match /syncRuns/{runId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    // Gmail message id registry, used to avoid processing the same mail twice.
+    // Written exclusively by Cloud Functions.
+    match /processedEmails/{messageId} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    // Deny everything else by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
