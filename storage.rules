@@ -1,0 +1,27 @@
+rules_version = '2';
+
+// ---------------------------------------------------------------------------
+// AusbildungTracker – Cloud Storage security rules
+//
+// Attachments (Anschreiben, Lebenslauf versions, ...) are stored per user and
+// are only readable/writable by the single owner of the app.
+// ---------------------------------------------------------------------------
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isOwner() {
+      return request.auth != null
+        && firestore.get(/databases/(default)/documents/settings/access).data.ownerUid == request.auth.uid;
+    }
+
+    match /users/{userId}/attachments/{allPaths=**} {
+      allow read: if isOwner();
+      allow write: if isOwner()
+        && request.resource.size < 15 * 1024 * 1024;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
